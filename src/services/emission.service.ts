@@ -24,6 +24,14 @@ import type {
 import type { Server as SocketIOServer } from "socket.io";
 
 const ONE_DAY_SEC = 24 * 60 * 60;
+const AGGREGATIONS_CACHE_TTL_SEC = 5 * 60; // 5 minutes
+const AGGREGATIONS_CACHE_KEY = "nogiet:emissions:aggregations:v1";
+
+/**
+ * Versioning the cache key (`:v1`) lets us bust the cache without a Redis flush
+ * the next time the aggregation shape changes — bump to `:v2` and old payloads
+ * become unreachable, regardless of their TTL.
+ */
 
 export class EmissionService {
   private io: SocketIOServer | null = null;
@@ -70,7 +78,10 @@ export class EmissionService {
   }
 
   async createFacility(input: CreateFacilityInput) {
-    return this.emissionRepo.createFacility(input);
+    const created = await this.emissionRepo.createFacility(input);
+    // New facility → cumulative/region/operator aggregates change → bust cache.
+    await this.invalidateAggregationsCache();
+    return created;
   }
 
   async deleteFacility(id: string) {
@@ -78,7 +89,9 @@ export class EmissionService {
     if (!facility) {
       throw Object.assign(new Error("Facility not found"), { statusCode: 404 });
     }
-    return this.emissionRepo.deleteFacility(id);
+    const result = await this.emissionRepo.deleteFacility(id);
+    await this.invalidateAggregationsCache();
+    return result;
   }
 
   async updateFacilityThreshold(id: string, input: UpdateFacilityThresholdInput) {
@@ -100,6 +113,10 @@ export class EmissionService {
     if (!facility) {
       throw Object.assign(new Error("Facility not found"), { statusCode: 404 });
     }
+    // Fire-and-forget invalidation so the next aggregations request is fresh;
+    // we don't await it because the user shouldn't pay for a Redis hop on the
+    // write path. CacheService swallows its own errors so this is safe.
+    void this.invalidateAggregationsCache();
     return this.emissionRepo.submitGroundData({
       facilityId: input.facilityId,
       submittedBy: userId,
@@ -564,6 +581,24 @@ export class EmissionService {
   }
 
   async getEmissionAggregations() {
-    return this.emissionRepo.getEmissionAggregations();
+    // First-boot of the Data Explorer screen used to wait on three sequential
+    // group-by queries against remote Aiven Postgres (~800-1200ms). The
+    // repository now runs them in parallel, but the joined dataset still has
+    // to traverse facility + measurement tables every call. Cache the result
+    // for 5 minutes; ground submissions invalidate it explicitly via
+    // `invalidateAggregationsCache()` so users see their reading instantly.
+    const cached = await this.cache.get<Awaited<ReturnType<typeof this.emissionRepo.getEmissionAggregations>>>(
+      AGGREGATIONS_CACHE_KEY,
+    );
+    if (cached) return cached;
+
+    const fresh = await this.emissionRepo.getEmissionAggregations();
+    await this.cache.set(AGGREGATIONS_CACHE_KEY, fresh, AGGREGATIONS_CACHE_TTL_SEC);
+    return fresh;
+  }
+
+  /** Explicit cache buster — called after any write that would change aggregates. */
+  private async invalidateAggregationsCache(): Promise<void> {
+    await this.cache.del(AGGREGATIONS_CACHE_KEY);
   }
 }

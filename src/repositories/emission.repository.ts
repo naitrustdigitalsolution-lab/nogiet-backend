@@ -306,37 +306,41 @@ export class EmissionRepository {
   }
 
   async getEmissionAggregations() {
-    const byRegion = await this.db
-      .select({
-        region: facilities.region,
-        count: sql<number>`count(*)`,
-        avgReading: sql<number>`avg(${groundMeasurements.methaneReading})`,
-      })
-      .from(groundMeasurements)
-      .leftJoin(facilities, eq(groundMeasurements.facilityId, facilities.id))
-      .groupBy(facilities.region);
-
-    const byOperator = await this.db
-      .select({
-        operator: facilities.operator,
-        count: sql<number>`count(*)`,
-        avgReading: sql<number>`avg(${groundMeasurements.methaneReading})`,
-      })
-      .from(groundMeasurements)
-      .leftJoin(facilities, eq(groundMeasurements.facilityId, facilities.id))
-      .groupBy(facilities.operator);
-
-    const cumulativeByFacility = await this.db
-      .select({
-        facilityId: groundMeasurements.facilityId,
-        facilityName: facilities.name,
-        totalEmission: sql<number>`sum(${groundMeasurements.methaneReading})`,
-        count: sql<number>`count(*)`,
-        latestDate: sql<string>`max(${groundMeasurements.measurementDate})`,
-      })
-      .from(groundMeasurements)
-      .leftJoin(facilities, eq(groundMeasurements.facilityId, facilities.id))
-      .groupBy(groundMeasurements.facilityId, facilities.name);
+    // Aiven Postgres adds ~200-300ms per round-trip from our dev/EU egress, so
+    // running these three independent group-by queries sequentially used to cost
+    // ~1s of pure network latency. They have no inter-dependency — fire them in
+    // parallel so total wall time ≈ slowest single query, not their sum.
+    const [byRegion, byOperator, cumulativeByFacility] = await Promise.all([
+      this.db
+        .select({
+          region: facilities.region,
+          count: sql<number>`count(*)`,
+          avgReading: sql<number>`avg(${groundMeasurements.methaneReading})`,
+        })
+        .from(groundMeasurements)
+        .leftJoin(facilities, eq(groundMeasurements.facilityId, facilities.id))
+        .groupBy(facilities.region),
+      this.db
+        .select({
+          operator: facilities.operator,
+          count: sql<number>`count(*)`,
+          avgReading: sql<number>`avg(${groundMeasurements.methaneReading})`,
+        })
+        .from(groundMeasurements)
+        .leftJoin(facilities, eq(groundMeasurements.facilityId, facilities.id))
+        .groupBy(facilities.operator),
+      this.db
+        .select({
+          facilityId: groundMeasurements.facilityId,
+          facilityName: facilities.name,
+          totalEmission: sql<number>`sum(${groundMeasurements.methaneReading})`,
+          count: sql<number>`count(*)`,
+          latestDate: sql<string>`max(${groundMeasurements.measurementDate})`,
+        })
+        .from(groundMeasurements)
+        .leftJoin(facilities, eq(groundMeasurements.facilityId, facilities.id))
+        .groupBy(groundMeasurements.facilityId, facilities.name),
+    ]);
 
     return {
       byRegion: byRegion.map((r: any) => ({ region: r.region, count: Number(r.count), avgReading: Number(r.avgReading ?? 0) })),

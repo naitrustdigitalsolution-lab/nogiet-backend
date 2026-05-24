@@ -115,8 +115,13 @@ export class SatelliteAggregatorService {
     }
 
     if (shouldFetch("tropomi") && this.tropomi.isConfigured) {
+      // Force-refresh path busts the 24h cache so a manual `/satellite/refresh`
+      // tick can pick up the latest CDSE scenes; standard reads serve cache.
+      const tropomiCall = forceRefresh
+        ? this.tropomi.refreshSources(NIGERIA_BBOX)
+        : this.tropomi.fetchSources(NIGERIA_BBOX);
       fetchTasks.push(
-        this.tropomi.fetchSources(NIGERIA_BBOX).catch(err => {
+        tropomiCall.catch(err => {
           console.warn("[Aggregator] TROPOMI failed:", err.message);
           return [];
         })

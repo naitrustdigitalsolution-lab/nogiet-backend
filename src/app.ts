@@ -101,11 +101,14 @@ export async function buildApp(db: any): Promise<AppContext> {
   const emailService = new EmailService();
   const smsService = new SmsService();
   const carbonMapper = new CarbonMapperService();
-  const tropomiService = new TropomiService();
   const r2 = new CloudflareR2Service();
   const cacheService = new CacheService();
-  // IMEO mirrors CarbonMapper: persistent Redis cache + stale-fallback for resilience.
+  // IMEO + TROPOMI share the resilience pattern: 24h Redis cache + 7-day stale
+  // fallback. Both upstreams are unreliable from arbitrary egress IPs (IMEO via
+  // Cloudflare WAF, CDSE via occasional 5xx) so stale fallback keeps the map
+  // populated through outages.
   const imeoService = new ImeoService(cacheService);
+  const tropomiService = new TropomiService(cacheService);
   const aggregator = new SatelliteAggregatorService(carbonMapper, imeoService, tropomiService, cacheService);
 
   const authService = new AuthService(userRepo, emailService, smsService, fastify);

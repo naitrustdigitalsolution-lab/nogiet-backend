@@ -53,9 +53,27 @@ const envSchema = z.object({
    */
   IMEO_SECTOR_FILTER: z.string().optional().default("oil and gas"),
 
-  // Sentinel-5P TROPOMI
-  TROPOMI_API_URL: z.string().optional(),
+  // ---- Sentinel-5P TROPOMI (Copernicus Data Space Ecosystem) ----
+  // Catalogue browsing is public (no API key required). An API key is only
+  // needed when downloading the raw NetCDF granules, which this service does
+  // not do — it only surfaces scene metadata.
+  TROPOMI_API_URL: z
+    .string()
+    .default("https://catalogue.dataspace.copernicus.eu/odata/v1"),
+  /** Reserved for future raw-product download flows. Empty = browse-only. */
   TROPOMI_API_KEY: z.string().optional(),
+  /** Mission / collection name in CDSE OData (`SENTINEL-5P`). */
+  TROPOMI_COLLECTION: z.string().default("SENTINEL-5P"),
+  /** Product type substring matched via OData `contains(Name, ...)`. */
+  TROPOMI_PRODUCT_TYPE: z.string().default("L2__CH4___"),
+  /** Look-back window in days for scene discovery (CDSE keeps roughly the last year). */
+  TROPOMI_DAYS_BACK: z.coerce.number().int().positive().default(30),
+  /** Hard cap on how many scenes we hold in cache; keeps the map uncluttered. */
+  TROPOMI_MAX_RESULTS: z.coerce.number().int().positive().default(50),
+  /** Optional bbox override; defaults to NIGERIA_BBOX from carbon-mapper.service. */
+  TROPOMI_BBOX: z.string().optional(),
+  /** Emit the first raw CDSE record to server logs for debugging. */
+  TROPOMI_LOG_RESPONSE: z.coerce.boolean().optional().default(false),
 
   // Resend (Email)
   RESEND_API_KEY: z.string().optional(),
