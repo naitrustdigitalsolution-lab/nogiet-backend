@@ -3,6 +3,7 @@ import { env } from "../../config/env";
 import type { NormalizedSource } from "../../types/index";
 import { isInsideBBox, type BBox } from "./carbon-mapper.service";
 import { CacheService } from "../cache.service";
+import { SATELLITE_REFRESH_INTERVAL_SEC } from "./satellite-refresh.constants";
 
 /** Cache key helper — mirrors `bboxCacheKey` from CarbonMapperService. */
 export function imeoCacheKey(gasType: string): string {
@@ -13,7 +14,6 @@ export function imeoStaleKey(gasType: string): string {
   return `nogiet:imeo:plumes:${gasType}:stale`;
 }
 
-const TWO_HOURS_SEC = 2 * 60 * 60;
 const SEVEN_DAYS_SEC = 7 * 24 * 60 * 60;
 
 /**
@@ -296,7 +296,7 @@ export class ImeoService {
     this.fetchPromise = this.fetchAllSourcesLive()
       .then(async (sources) => {
         if (this.cache && sources.length > 0) {
-          await this.cache.set(imeoCacheKey(gasType), sources, TWO_HOURS_SEC);
+          await this.cache.set(imeoCacheKey(gasType), sources, SATELLITE_REFRESH_INTERVAL_SEC);
           // Long-lived stale copy for resilience (CF blocks, IMEO downtime).
           await this.cache.set(imeoStaleKey(gasType), sources, SEVEN_DAYS_SEC);
         }

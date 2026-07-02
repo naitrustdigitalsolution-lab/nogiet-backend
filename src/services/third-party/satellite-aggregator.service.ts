@@ -4,8 +4,8 @@ import { ImeoService } from "./imeo.service";
 import { TropomiService } from "./tropomi.service";
 import { CacheService } from "../cache.service";
 import type { NormalizedSource, SatelliteProvider, CarbonMapperSource } from "../../types/index";
+import { SATELLITE_REFRESH_INTERVAL_SEC } from "./satellite-refresh.constants";
 
-const TWO_HOURS_SEC = 2 * 60 * 60;
 const AGGREGATED_CACHE_VERSION = "v2-nonzero-emissions";
 
 function hasMeasuredEmissionRate(source: NormalizedSource): boolean {
@@ -63,7 +63,7 @@ export class SatelliteAggregatorService {
     const results = await this.fetchFromProviders(providerFilter, gasType);
 
     if (results.length > 0) {
-      await this.cache.set(cacheKey, results, TWO_HOURS_SEC);
+      await this.cache.set(cacheKey, results, SATELLITE_REFRESH_INTERVAL_SEC);
     }
 
     return bbox ? results.filter(s => isInsideBBox(s.latitude, s.longitude, bbox)) : results;
@@ -80,7 +80,7 @@ export class SatelliteAggregatorService {
     const results = await this.fetchFromProviders(providerFilter, gasType, /* forceRefresh */ true);
 
     if (results.length > 0) {
-      await this.cache.set(cacheKey, results, TWO_HOURS_SEC);
+      await this.cache.set(cacheKey, results, SATELLITE_REFRESH_INTERVAL_SEC);
     }
 
     return bbox ? results.filter(s => isInsideBBox(s.latitude, s.longitude, bbox)) : results;
@@ -120,7 +120,7 @@ export class SatelliteAggregatorService {
     }
 
     if (shouldFetch("tropomi") && this.tropomi.isConfigured) {
-      // Force-refresh path busts the 24h cache so a manual `/satellite/refresh`
+      // Force-refresh path busts the fresh cache so a manual `/satellite/refresh`
       // tick can pick up the latest CDSE scenes; standard reads serve cache.
       const tropomiCall = forceRefresh
         ? this.tropomi.refreshSources(NIGERIA_BBOX)

@@ -8,6 +8,7 @@ import { CarbonMapperService, bboxCacheKey, NIGERIA_BBOX, isInsideBBox } from ".
 import type { BBox } from "./third-party/carbon-mapper.service";
 import { SatelliteAggregatorService } from "./third-party/satellite-aggregator.service";
 import { ImeoService, type ImeoPlumeImage } from "./third-party/imeo.service";
+import { SATELLITE_REFRESH_INTERVAL_SEC } from "./third-party/satellite-refresh.constants";
 import type { CarbonMapperSource, NormalizedSource, SatelliteProvider } from "../types/index";
 import { CacheService } from "./cache.service";
 import { NotificationService } from "./notification.service";
@@ -29,7 +30,6 @@ import type {
 } from "../validations/emission.validation";
 import type { Server as SocketIOServer } from "socket.io";
 
-const TWO_HOURS_SEC = 2 * 60 * 60;
 const AGGREGATIONS_CACHE_TTL_SEC = 5 * 60; // 5 minutes
 const AGGREGATIONS_CACHE_KEY = "nogiet:emissions:aggregations:v1";
 const __filename = fileURLToPath(import.meta.url);
@@ -416,7 +416,7 @@ export class EmissionService {
    * Hard upper bound for the satellite fetch in `getComparisonData`. The previous
    * version had no timeout and relied solely on Carbon Mapper, so any hang in the
    * upstream API would lock the whole comparison request for the user. Eight
-   * seconds gives the aggregator (which has its own 24h Redis cache + 7-day
+   * seconds gives the aggregator (which has its own 30-minute Redis cache + 7-day
    * stale fallback) plenty of headroom while guaranteeing the endpoint always
    * returns within a reasonable time.
    */
@@ -546,7 +546,7 @@ export class EmissionService {
     this.fetchPromise = this.carbonMapper
       .fetchAllSources({ ...filters, gasType: gasType as "CH4" | "CO2" })
       .then(async (sources) => {
-        await this.cache.set(cacheKey, sources, TWO_HOURS_SEC);
+        await this.cache.set(cacheKey, sources, SATELLITE_REFRESH_INTERVAL_SEC);
         return sources;
       })
       .finally(() => {

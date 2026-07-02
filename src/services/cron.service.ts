@@ -1,5 +1,6 @@
 import cron from "node-cron";
 import { EmissionService } from "./emission.service";
+import { SATELLITE_REFRESH_INTERVAL_LABEL } from "./third-party/satellite-refresh.constants";
 
 export class CronService {
   private task: ReturnType<typeof cron.schedule> | null = null;
@@ -14,14 +15,14 @@ export class CronService {
       console.warn("[Cron] startup satellite refresh failed:", err.message);
     });
 
-    this.task = cron.schedule("0 */2 * * *", async () => {
+    this.task = cron.schedule("*/30 * * * *", async () => {
       try {
         await this.refreshSatellitesAndCheckThresholds();
       } catch (err: any) {
         console.warn("[Cron] satellite refresh failed:", err.message);
       }
     });
-    console.log("[Cron] Satellite refresh + threshold monitoring started (startup + every 2 hours)");
+    console.log(`[Cron] Satellite refresh + threshold monitoring started (startup + every ${SATELLITE_REFRESH_INTERVAL_LABEL})`);
   }
 
   stop() {

@@ -103,7 +103,7 @@ export async function buildApp(db: any): Promise<AppContext> {
   const carbonMapper = new CarbonMapperService();
   const r2 = new CloudflareR2Service();
   const cacheService = new CacheService();
-  // IMEO + TROPOMI share the resilience pattern: 24h Redis cache + 7-day stale
+  // IMEO + TROPOMI share the resilience pattern: 30-minute Redis cache + 7-day stale
   // fallback. Both upstreams are unreliable from arbitrary egress IPs (IMEO via
   // Cloudflare WAF, CDSE via occasional 5xx) so stale fallback keeps the map
   // populated through outages.

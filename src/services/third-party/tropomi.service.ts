@@ -7,8 +7,8 @@ import { env } from "../../config/env";
 import type { NormalizedSource } from "../../types/index";
 import { NIGERIA_BBOX, isInsideBBox, type BBox } from "./carbon-mapper.service";
 import { CacheService } from "../cache.service";
+import { SATELLITE_REFRESH_INTERVAL_SEC } from "./satellite-refresh.constants";
 
-const TWO_HOURS_SEC = 2 * 60 * 60;
 const SEVEN_DAYS_SEC = 7 * 24 * 60 * 60;
 
 // Cache key version. Bump when the normalized scene shape changes so old
@@ -62,7 +62,7 @@ const GEE_CH4_BAND = "CH4_column_volume_mixing_ratio_dry_air";
  *      `emissionRate: 0` below with a real ppb-derived value.
  *
  * Resilience model mirrors `ImeoService`:
- *   - 24h Redis cache of normalized scenes
+ *   - 30-minute Redis cache of normalized scenes
  *   - 7-day long-lived stale fallback for outages
  *   - In-flight dedup so concurrent callers share a single upstream fetch
  */
@@ -97,7 +97,7 @@ export class TropomiService {
     return bbox ? all.filter((s) => isInsideBBox(s.latitude, s.longitude, bbox)) : all;
   }
 
-  /** Force-refresh path. Busts the 24h cache; still falls back to stale on failure. */
+  /** Force-refresh path. Busts the fresh cache; still falls back to stale on failure. */
   async refreshSources(bbox?: BBox): Promise<NormalizedSource[]> {
     if (!this.isConfigured) return [];
     if (this.cache) await this.cache.del(tropomiCacheKey());
@@ -124,7 +124,7 @@ export class TropomiService {
     this.fetchPromise = this.fetchAllSourcesLive()
       .then(async (sources) => {
         if (this.cache && sources.length > 0) {
-          await this.cache.set(tropomiCacheKey(), sources, TWO_HOURS_SEC);
+          await this.cache.set(tropomiCacheKey(), sources, SATELLITE_REFRESH_INTERVAL_SEC);
           await this.cache.set(tropomiStaleKey(), sources, SEVEN_DAYS_SEC);
         }
         return sources;

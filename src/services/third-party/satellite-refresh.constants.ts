@@ -1,0 +1,3 @@
+export const SATELLITE_REFRESH_INTERVAL_SEC = 30 * 60;
+export const SATELLITE_REFRESH_INTERVAL_LABEL = "30 minutes";
+
