@@ -6,6 +6,7 @@ import type {
   EmissionFilterInput,
   AnalyticsReportInput,
   CreateFacilityInput,
+  UpdateFacilityInput,
   CreateAlertInput,
   UpdateFacilityThresholdInput,
   UpdateOilBlockOverrideInput,
@@ -20,8 +21,8 @@ export class EmissionController {
 
   getFacilities = async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const { state, lga, oilBlock, operator, facilityType } = request.query as any;
-      const result = await this.emissionService.getFacilities({ state, lga, oilBlock, operator, facilityType });
+      const { state, lga, oilBlock, operator, facilityType, subSector } = request.query as any;
+      const result = await this.emissionService.getFacilities({ state, lga, oilBlock, operator, facilityType, subSector });
       return success(reply, result);
     } catch (err: any) {
       return error(reply, err.message, err.statusCode ?? 500);
@@ -44,6 +45,19 @@ export class EmissionController {
         request.body as CreateFacilityInput
       );
       return created(reply, result, "Facility created");
+    } catch (err: any) {
+      return error(reply, err.message, err.statusCode ?? 500);
+    }
+  };
+
+  updateFacility = async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const result = await this.emissionService.updateFacility(
+        id,
+        request.body as UpdateFacilityInput
+      );
+      return success(reply, result, "Facility updated");
     } catch (err: any) {
       return error(reply, err.message, err.statusCode ?? 500);
     }
@@ -368,6 +382,15 @@ export class EmissionController {
   getAnalyticsReport = async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const result = await this.emissionService.getAnalyticsReport(request.query as AnalyticsReportInput);
+      return success(reply, result);
+    } catch (err: any) {
+      return error(reply, err.message, err.statusCode ?? 500);
+    }
+  };
+
+  getDataCompletenessAudit = async (_request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const result = await this.emissionService.getDataCompletenessAudit();
       return success(reply, result);
     } catch (err: any) {
       return error(reply, err.message, err.statusCode ?? 500);

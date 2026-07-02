@@ -43,6 +43,13 @@
       "when": 1782540000000,
       "tag": "0005_facility_classification",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1783008000000,
+      "tag": "0006_repair_alert_geofence_schema",
+      "breakpoints": true
     }
   ]
 }

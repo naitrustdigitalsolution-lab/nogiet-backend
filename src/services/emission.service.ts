@@ -18,6 +18,7 @@ import type {
   EmissionFilterInput,
   AnalyticsReportInput,
   CreateFacilityInput,
+  UpdateFacilityInput,
   CreateAlertInput,
   UpdateFacilityThresholdInput,
   UpdateOilBlockOverrideInput,
@@ -108,6 +109,25 @@ export class EmissionService {
     // New facility → cumulative/region/operator aggregates change → bust cache.
     await this.invalidateAggregationsCache();
     return created;
+  }
+
+  async updateFacility(id: string, input: UpdateFacilityInput) {
+    const facility = await this.emissionRepo.findFacilityById(id);
+    if (!facility) {
+      throw Object.assign(new Error("Facility not found"), { statusCode: 404 });
+    }
+
+    const update = Object.fromEntries(
+      Object.entries(input).filter(([, value]) => value !== undefined),
+    ) as UpdateFacilityInput;
+
+    if (Object.keys(update).length === 0) {
+      throw Object.assign(new Error("At least one facility field is required"), { statusCode: 400 });
+    }
+
+    const updated = await this.emissionRepo.updateFacility(id, update);
+    await this.invalidateAggregationsCache();
+    return updated;
   }
 
   async deleteFacility(id: string) {
@@ -810,6 +830,128 @@ export class EmissionService {
       rows,
       satelliteRows,
       groundRows: groundTableRows,
+    };
+  }
+
+  async getDataCompletenessAudit() {
+    const [dbSummary, satelliteSources] = await Promise.all([
+      this.emissionRepo.getDataCompletenessSummary(),
+      this.aggregator.fetchAllSources(NIGERIA_BBOX, undefined, "CH4").catch(() => [] as NormalizedSource[]),
+    ]);
+
+    const byProvider = new Map<SatelliteProvider, {
+      provider: SatelliteProvider;
+      configured: boolean;
+      sourceCount: number;
+      totalEmissionRate: number;
+      latestDetection: string | null;
+      status: "active" | "configured_no_data" | "not_configured";
+    }>();
+
+    const providerLabels: SatelliteProvider[] = ["carbon_mapper", "imeo", "tropomi"];
+    for (const provider of providerLabels) {
+      const configured = this.aggregator.configuredProviders.includes(provider);
+      byProvider.set(provider, {
+        provider,
+        configured,
+        sourceCount: 0,
+        totalEmissionRate: 0,
+        latestDetection: null,
+        status: configured ? "configured_no_data" : "not_configured",
+      });
+    }
+
+    for (const source of satelliteSources) {
+      const provider = source.provider;
+      const row = byProvider.get(provider);
+      if (!row) continue;
+      row.sourceCount += 1;
+      row.totalEmissionRate += Number(source.emissionRate ?? 0);
+      const detected = source.lastDetected || source.firstDetected || null;
+      if (detected && (!row.latestDetection || new Date(detected) > new Date(row.latestDetection))) {
+        row.latestDetection = detected;
+      }
+      row.status = "active";
+    }
+
+    const totalFacilities = dbSummary.facilities.total || 1;
+    const metadataFields = [
+      { key: "subSector", label: "Sub-sector", count: dbSummary.facilities.withSubSector },
+      { key: "oilBlock", label: "Oil Block", count: dbSummary.facilities.withOilBlock },
+      { key: "state", label: "State", count: dbSummary.facilities.withState },
+      { key: "lga", label: "LGA", count: dbSummary.facilities.withLga },
+      { key: "operator", label: "Operator", count: dbSummary.facilities.withOperator },
+    ].map((field) => ({
+      ...field,
+      missing: Math.max(0, dbSummary.facilities.total - field.count),
+      coveragePercent: dbSummary.facilities.total === 0 ? 0 : Math.round((field.count / totalFacilities) * 100),
+    }));
+
+    const providerRows = [...byProvider.values()].map((row) => ({
+      ...row,
+      totalEmissionRate: Math.round(row.totalEmissionRate * 100) / 100,
+    }));
+
+    const gaps = [
+      ...providerRows
+        .filter((row) => row.status !== "active")
+        .map((row) => ({
+          severity: row.configured ? "medium" : "high",
+          item: `${row.provider.replace(/_/g, " ")} has no visible live detections`,
+          recommendation: row.configured
+            ? "Check credentials, upstream availability, filters, and cache refresh logs."
+            : "Configure this provider if the client expects it in production coverage.",
+        })),
+      ...metadataFields
+        .filter((field) => field.missing > 0)
+        .map((field) => ({
+          severity: field.coveragePercent < 70 ? "medium" : "low",
+          item: `${field.missing} facilities missing ${field.label}`,
+          recommendation: "Update facility records so analytics can be filtered and attributed correctly.",
+        })),
+    ];
+
+    return {
+      generatedAt: new Date().toISOString(),
+      summary: {
+        configuredSatelliteProviders: this.aggregator.configuredProviders.length,
+        activeSatelliteProviders: providerRows.filter((row) => row.status === "active").length,
+        satelliteDetections: satelliteSources.length,
+        satelliteEmissionRate: Math.round(satelliteSources.reduce((sum, s) => sum + Number(s.emissionRate ?? 0), 0) * 100) / 100,
+        facilities: dbSummary.facilities.total,
+        groundMeasurements: dbSummary.groundMeasurements.total,
+        facilitiesWithGroundData: dbSummary.groundMeasurements.facilitiesWithGroundData,
+      },
+      providers: providerRows,
+      facilityMetadata: metadataFields,
+      groundMeasurements: dbSummary.groundMeasurements,
+      integrationCandidates: [
+        {
+          name: "Carbon Mapper",
+          category: "satellite plume detections",
+          status: byProvider.get("carbon_mapper")?.status ?? "not_configured",
+          action: "Keep as a primary plume-level satellite source.",
+        },
+        {
+          name: "UNEP IMEO",
+          category: "global methane plume inventory",
+          status: byProvider.get("imeo")?.status ?? "not_configured",
+          action: "Keep enabled once upstream token/IP access is accepted.",
+        },
+        {
+          name: "Sentinel-5P TROPOMI",
+          category: "regional methane column observations",
+          status: byProvider.get("tropomi")?.status ?? "not_configured",
+          action: "Use as broad coverage filtered to configured petroleum basins.",
+        },
+        {
+          name: "Regulator ground-truth submissions",
+          category: "manual field measurements",
+          status: dbSummary.groundMeasurements.total > 0 ? "active" : "configured_no_data",
+          action: "Increase facility-linked field readings for validation and enforcement evidence.",
+        },
+      ],
+      gaps,
     };
   }
 

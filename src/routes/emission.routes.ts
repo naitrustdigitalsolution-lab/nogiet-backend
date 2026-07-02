@@ -8,6 +8,7 @@ import {
   emissionFilterSchema,
   analyticsReportSchema,
   createFacilitySchema,
+  updateFacilitySchema,
   createAlertSchema,
   updateFacilityThresholdSchema,
   oilBlockIdParamSchema,
@@ -33,6 +34,11 @@ export function emissionRoutes(fastify: FastifyInstance, controller: EmissionCon
   fastify.post("/facilities", {
     preHandler: [authenticate, validate(createFacilitySchema)],
     handler: controller.createFacility,
+  });
+
+  fastify.put("/facilities/:id", {
+    preHandler: [authenticate, validate(facilityIdParamSchema, "params"), validate(updateFacilitySchema)],
+    handler: controller.updateFacility,
   });
 
   fastify.put("/facilities/:id/threshold", {
@@ -194,5 +200,10 @@ export function emissionRoutes(fastify: FastifyInstance, controller: EmissionCon
   fastify.get("/analytics/report", {
     preHandler: [authenticate, validate(analyticsReportSchema, "querystring")],
     handler: controller.getAnalyticsReport,
+  });
+
+  fastify.get("/emissions/completeness", {
+    preHandler: [authenticate],
+    handler: controller.getDataCompletenessAudit,
   });
 }

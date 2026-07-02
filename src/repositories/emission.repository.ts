@@ -7,6 +7,7 @@ export interface FacilityFilters {
   oilBlock?: string;
   operator?: string;
   facilityType?: string;
+  subSector?: string;
 }
 
 export class EmissionRepository {
@@ -20,6 +21,7 @@ export class EmissionRepository {
     if (filters?.oilBlock) conditions.push(ilike(facilities.oilBlock, `%${filters.oilBlock}%`));
     if (filters?.operator) conditions.push(ilike(facilities.operator, `%${filters.operator}%`));
     if (filters?.facilityType) conditions.push(eq(facilities.facilityType, filters.facilityType));
+    if (filters?.subSector) conditions.push(eq(facilities.subSector, filters.subSector));
 
     if (conditions.length > 0) {
       return this.db.select().from(facilities).where(and(...conditions)).orderBy(facilities.name);
@@ -39,6 +41,15 @@ export class EmissionRepository {
   async createFacility(data: typeof facilities.$inferInsert) {
     const [facility] = await this.db.insert(facilities).values(data).returning();
     return facility;
+  }
+
+  async updateFacility(id: string, data: Partial<typeof facilities.$inferInsert>) {
+    const [facility] = await this.db
+      .update(facilities)
+      .set(data)
+      .where(eq(facilities.id, id))
+      .returning();
+    return facility ?? null;
   }
 
   async updateFacilityThreshold(id: string, alertThreshold: number | null) {
@@ -61,12 +72,14 @@ export class EmissionRepository {
     const oilBlocks = await this.db.selectDistinct({ value: facilities.oilBlock }).from(facilities).where(sql`${facilities.oilBlock} IS NOT NULL`);
     const operators = await this.db.selectDistinct({ value: facilities.operator }).from(facilities).where(sql`${facilities.operator} IS NOT NULL`);
     const facilityTypes = await this.db.selectDistinct({ value: facilities.facilityType }).from(facilities).where(sql`${facilities.facilityType} IS NOT NULL`);
+    const subSectors = await this.db.selectDistinct({ value: facilities.subSector }).from(facilities).where(sql`${facilities.subSector} IS NOT NULL`);
     return {
       states: states.map((r: any) => r.value).filter(Boolean),
       lgas: lgas.map((r: any) => r.value).filter(Boolean),
       oilBlocks: oilBlocks.map((r: any) => r.value).filter(Boolean),
       operators: operators.map((r: any) => r.value).filter(Boolean),
       facilityTypes: facilityTypes.map((r: any) => r.value).filter(Boolean),
+      subSectors: subSectors.map((r: any) => r.value).filter(Boolean),
     };
   }
 
@@ -384,6 +397,57 @@ export class EmissionRepository {
         count: Number(r.count),
         latestDate: r.latestDate,
       })),
+    };
+  }
+
+  async getDataCompletenessSummary() {
+    const [facilitySummary, groundSummary] = await Promise.all([
+      this.db
+        .select({
+          totalFacilities: sql<number>`count(*)`,
+          withSubSector: sql<number>`count(*) filter (where ${facilities.subSector} is not null and ${facilities.subSector} <> '')`,
+          withOilBlock: sql<number>`count(*) filter (where ${facilities.oilBlock} is not null and ${facilities.oilBlock} <> '')`,
+          withState: sql<number>`count(*) filter (where ${facilities.state} is not null and ${facilities.state} <> '')`,
+          withLga: sql<number>`count(*) filter (where ${facilities.lga} is not null and ${facilities.lga} <> '')`,
+          withOperator: sql<number>`count(*) filter (where ${facilities.operator} is not null and ${facilities.operator} <> '')`,
+        })
+        .from(facilities),
+      this.db
+        .select({
+          totalMeasurements: sql<number>`count(${groundMeasurements.id})`,
+          facilitiesWithGroundData: sql<number>`count(distinct ${groundMeasurements.facilityId})`,
+        })
+        .from(groundMeasurements),
+    ]);
+
+    const measurementsBySubSector = await this.db
+      .select({
+        subSector: facilities.subSector,
+        measurementCount: sql<number>`count(${groundMeasurements.id})`,
+        facilityCount: sql<number>`count(distinct ${groundMeasurements.facilityId})`,
+      })
+      .from(groundMeasurements)
+      .leftJoin(facilities, eq(groundMeasurements.facilityId, facilities.id))
+      .groupBy(facilities.subSector);
+
+    return {
+      facilities: {
+        total: Number(facilitySummary[0]?.totalFacilities ?? 0),
+        withSubSector: Number(facilitySummary[0]?.withSubSector ?? 0),
+        withOilBlock: Number(facilitySummary[0]?.withOilBlock ?? 0),
+        withState: Number(facilitySummary[0]?.withState ?? 0),
+        withLga: Number(facilitySummary[0]?.withLga ?? 0),
+        withOperator: Number(facilitySummary[0]?.withOperator ?? 0),
+      },
+      groundMeasurements: {
+        total: Number(groundSummary[0]?.totalMeasurements ?? 0),
+        facilitiesWithGroundData: Number(groundSummary[0]?.facilitiesWithGroundData ?? 0),
+        bySubSector: measurementsBySubSector.map((r: any) => ({
+          subSector: r.subSector ?? "Unclassified",
+          measurementCount: Number(r.measurementCount ?? 0),
+          facilityCount: Number(r.facilityCount ?? 0),
+        })),
+      },
     };
   }
 }

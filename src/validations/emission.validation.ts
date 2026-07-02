@@ -38,6 +38,7 @@ export const emissionFilterSchema = z.object({
   oilBlock: z.string().optional(),
   operator: z.string().optional(),
   facilityType: z.string().optional(),
+  subSector: z.enum(["Upstream", "Midstream", "Downstream"]).optional(),
 });
 
 export const analyticsReportSchema = z.object({
@@ -68,6 +69,11 @@ export const createFacilitySchema = z.object({
   customField1: z.string().optional(),
   customField2: z.string().optional(),
   customField3: z.string().optional(),
+});
+
+export const updateFacilitySchema = createFacilitySchema.partial().extend({
+  subSector: z.enum(["Upstream", "Midstream", "Downstream"]).optional(),
+  alertThreshold: z.number().positive().nullable().optional(),
 });
 
 export const updateFacilityThresholdSchema = z.object({
@@ -127,6 +133,7 @@ export type SubmitGroundDataInput = z.infer<typeof submitGroundDataSchema>;
 export type EmissionFilterInput = z.infer<typeof emissionFilterSchema>;
 export type AnalyticsReportInput = z.infer<typeof analyticsReportSchema>;
 export type CreateFacilityInput = z.infer<typeof createFacilitySchema>;
+export type UpdateFacilityInput = z.infer<typeof updateFacilitySchema>;
 export type CreateAlertInput = z.infer<typeof createAlertSchema>;
 export type UpdateFacilityThresholdInput = z.infer<typeof updateFacilityThresholdSchema>;
 export type UpdateOilBlockOverrideInput = z.infer<typeof updateOilBlockOverrideSchema>;
