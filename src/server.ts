@@ -13,9 +13,9 @@ async function main() {
 
   await connectRedis();
 
-  const { fastify, emissionService } = await buildApp(db);
+  const { fastify, emissionService, imeoFeedService } = await buildApp(db);
 
-  const cronService = new CronService(emissionService);
+  const cronService = new CronService(emissionService, imeoFeedService);
   cronService.start();
 
   try {

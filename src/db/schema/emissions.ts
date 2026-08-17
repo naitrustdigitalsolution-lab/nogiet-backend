@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, timestamp, real, integer, jsonb, boolean } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, text, timestamp, real, integer, jsonb, boolean, uniqueIndex } from "drizzle-orm/pg-core";
 import { users } from "./users";
 
 export const facilities = pgTable("facilities", {
@@ -83,3 +83,52 @@ export const alerts = pgTable("alerts", {
   metadata: jsonb("metadata"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+export const imeoFeedConfig = pgTable("imeo_feed_config", {
+  id: integer("id").primaryKey().default(1),
+  mode: varchar("mode", { length: 10 }).notNull().default("manual"),
+  activeBatchId: uuid("active_batch_id"),
+  lastApiTestAt: timestamp("last_api_test_at", { withTimezone: true }),
+  lastApiTestSuccess: boolean("last_api_test_success"),
+  lastApiTestMessage: text("last_api_test_message"),
+  updatedBy: uuid("updated_by").references(() => users.id),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const imeoUploadBatches = pgTable("imeo_upload_batches", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  filename: varchar("filename", { length: 255 }).notNull(),
+  checksum: varchar("checksum", { length: 64 }).notNull(),
+  format: varchar("format", { length: 20 }).notNull(),
+  reportingMonth: varchar("reporting_month", { length: 7 }).notNull(),
+  provider: varchar("provider", { length: 30 }).notNull().default("imeo"),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  lastReminderAt: timestamp("last_reminder_at", { withTimezone: true }),
+  uploadedBy: uuid("uploaded_by").references(() => users.id).notNull(),
+  r2Key: text("r2_key").notNull(),
+  recordCount: integer("record_count").notNull(),
+  rejectedCount: integer("rejected_count").notNull().default(0),
+  status: varchar("status", { length: 20 }).notNull().default("published"),
+  failureSummary: text("failure_summary"),
+  isActive: boolean("is_active").notNull().default(false),
+  restoredAt: timestamp("restored_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({ checksumIdx: uniqueIndex("imeo_upload_batches_provider_checksum_idx").on(table.provider, table.checksum) }));
+
+export const dataFeedConfig = pgTable("data_feed_config", {
+  provider: varchar("provider", { length: 30 }).primaryKey(),
+  mode: varchar("mode", { length: 10 }).notNull().default("inactive"),
+  activeBatchId: uuid("active_batch_id"),
+  lastApiTestAt: timestamp("last_api_test_at", { withTimezone: true }),
+  lastApiTestSuccess: boolean("last_api_test_success"),
+  lastApiTestMessage: text("last_api_test_message"),
+  updatedBy: uuid("updated_by").references(() => users.id),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const imeoManualRecords = pgTable("imeo_manual_records", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  batchId: uuid("batch_id").references(() => imeoUploadBatches.id, { onDelete: "cascade" }).notNull(),
+  sourceId: varchar("source_id", { length: 255 }).notNull(),
+  payload: jsonb("payload").notNull(),
+}, (table) => ({ batchSourceIdx: uniqueIndex("imeo_manual_records_batch_source_idx").on(table.batchId, table.sourceId) }));

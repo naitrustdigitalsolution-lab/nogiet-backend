@@ -55,4 +55,11 @@ export class EmailService {
     const html = alertEmailTemplate(name, alertTitle, alertDetails, severity);
     return this.send(email, `NOGIET Alert: ${alertTitle}`, html);
   }
+
+  async sendDataFeedReminder(email: string, name: string, provider: string, expiresAt: Date) {
+    const label = provider.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+    const expired = expiresAt.getTime() <= Date.now();
+    const html = `<div style="font-family:Arial,sans-serif;line-height:1.5"><p>Hello ${name},</p><p>The <strong>${label}</strong> manual data feed ${expired ? "expired" : "will expire"} on <strong>${expiresAt.toLocaleDateString("en-NG")}</strong>.</p><p>Please sign in to NOGIET and upload the latest data file.</p></div>`;
+    return this.send(email, `NOGIET Data Feed ${expired ? "Expired" : "Reminder"}: ${label}`, html);
+  }
 }

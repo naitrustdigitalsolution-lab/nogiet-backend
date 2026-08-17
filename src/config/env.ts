@@ -54,6 +54,8 @@ const envSchema = z.object({
    * Set `*` or `ALL` to disable sector filtering.
    */
   IMEO_SECTOR_FILTER: z.string().optional().default("oil and gas"),
+  IMEO_UPLOAD_MAX_MB: z.coerce.number().int().positive().default(50),
+  MANUAL_UPLOAD_STORAGE_DIR: z.string().default("storage/manual-uploads"),
 
   // ---- Sentinel-5P TROPOMI (Copernicus Data Space Ecosystem) ----
   // Catalogue browsing is public (no API key required). An API key is only
@@ -101,12 +103,27 @@ const envSchema = z.object({
   TROPOMI_OIL_BLOCK_TYPES: z.string().optional().default("OML"),
   /** Comma-separated basins considered oil/gas industry acreage for TROPOMI filtering. */
   TROPOMI_OIL_GAS_BASINS: z.string().optional().default("NIGER DLTA,BENIN EMBT,ANAM-NIGER,NIGER FAN,AVON FAN"),
-  /** Google Earth Engine service-account config for no-cost TROPOMI CH4 statistics. */
+  /** Google Earth Engine service-account config, shared by every GEE-backed provider (TROPOMI, EMIT). */
   GEE_PROJECT_ID: z.string().optional(),
   GEE_SERVICE_ACCOUNT_EMAIL: z.string().optional(),
   GEE_PRIVATE_KEY: z.string().optional(),
   /** Optional full service-account JSON string. Takes precedence over email/private key fields. */
   GEE_PRIVATE_KEY_JSON: z.string().optional(),
+
+  // ---- NASA EMIT (via Google Earth Engine, same GEE_* credentials as TROPOMI) ----
+  /** Look-back window in days for EMIT plume-complex discovery (data begins Aug 2022). */
+  EMIT_DAYS_BACK: z.coerce.number().int().positive().default(1500),
+  /**
+   * When true (default), every EMIT plume complex is required to fall inside a
+   * Nigerian oil block polygon — same "oil & gas only" spatial restriction as TROPOMI.
+   */
+  EMIT_FILTER_TO_OIL_BLOCKS: z.coerce.boolean().optional().default(true),
+  /** Comma-separated oil-block types allowed for EMIT (mirrors TROPOMI_OIL_BLOCK_TYPES). */
+  EMIT_OIL_BLOCK_TYPES: z.string().optional().default("OML"),
+  /** Comma-separated basins allowed for EMIT (mirrors TROPOMI_OIL_GAS_BASINS). */
+  EMIT_OIL_GAS_BASINS: z.string().optional().default("NIGER DLTA,BENIN EMBT,ANAM-NIGER,NIGER FAN,AVON FAN"),
+  /** Emit the raw GEE plume properties to server logs for debugging. */
+  EMIT_LOG_RESPONSE: z.coerce.boolean().optional().default(false),
 
   // Resend (Email)
   RESEND_API_KEY: z.string().optional(),

@@ -1,13 +1,10 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
-import { createRequire } from "node:module";
-import booleanPointInPolygon from "@turf/boolean-point-in-polygon";
 import { env } from "../../config/env";
 import type { NormalizedSource } from "../../types/index";
 import { NIGERIA_BBOX, isInsideBBox, type BBox } from "./carbon-mapper.service";
 import { CacheService } from "../cache.service";
 import { SATELLITE_REFRESH_INTERVAL_SEC } from "./satellite-refresh.constants";
+import { ee, ensureEarthEngineReady, evaluateEe, isGeeConfigured } from "./gee-client";
+import { findContainingOilBlock, isAllowedOilBlockFeature, loadOilBlockFeatures } from "./oil-block-filter";
 
 const SEVEN_DAYS_SEC = 7 * 24 * 60 * 60;
 
@@ -29,8 +26,6 @@ export function tropomiStaleKey(): string {
   return "nogiet:tropomi:scenes:CH4:v10:stale";
 }
 
-const require = createRequire(import.meta.url);
-const ee = require("@google/earthengine");
 const GEE_CH4_COLLECTION = "COPERNICUS/S5P/OFFL/L3_CH4";
 const GEE_CH4_BAND = "CH4_column_volume_mixing_ratio_dry_air";
 
@@ -67,9 +62,9 @@ const GEE_CH4_BAND = "CH4_column_volume_mixing_ratio_dry_air";
  *   - In-flight dedup so concurrent callers share a single upstream fetch
  */
 export class TropomiService {
+  private lastDiagnostic = "TROPOMI has not been tested yet";
   private baseUrl: string;
   private fetchPromise: Promise<NormalizedSource[]> | null = null;
-  private geeReady: Promise<void> | null = null;
 
   constructor(private cache?: CacheService) {
     this.baseUrl = (env.TROPOMI_API_URL ?? "").replace(/\/$/, "");
@@ -81,13 +76,14 @@ export class TropomiService {
    * but catalogue-only rows are not exposed as emissions.
    */
   get isConfigured(): boolean {
-    return !!(
-      env.GEE_PROJECT_ID?.trim() &&
-      (
-        env.GEE_PRIVATE_KEY_JSON?.trim() ||
-        (env.GEE_SERVICE_ACCOUNT_EMAIL?.trim() && env.GEE_PRIVATE_KEY?.trim())
-      )
-    );
+    return isGeeConfigured();
+  }
+
+  get diagnosticMessage(): string {
+    if (!this.isConfigured) {
+      return "Google Earth Engine is not configured. Set GEE_PROJECT_ID and either GEE_PRIVATE_KEY_JSON or GEE_SERVICE_ACCOUNT_EMAIL plus GEE_PRIVATE_KEY.";
+    }
+    return this.lastDiagnostic;
   }
 
   /** Standard fetch path. Returns cached scenes filtered to the caller's bbox. */
@@ -103,6 +99,13 @@ export class TropomiService {
     if (this.cache) await this.cache.del(tropomiCacheKey());
     const all = await this.fetchAllSourcesCached();
     return bbox ? all.filter((s) => isInsideBBox(s.latitude, s.longitude, bbox)) : all;
+  }
+
+  /** Strict health-check path: bypasses fresh and stale caches and propagates upstream failures. */
+  async testLiveConnection(bbox?: BBox): Promise<NormalizedSource[]> {
+    if (!this.isConfigured) throw new Error(this.diagnosticMessage);
+    const all = await this.fetchAllSourcesLive();
+    return bbox ? all.filter((source) => isInsideBBox(source.latitude, source.longitude, bbox)) : all;
   }
 
   // ---------- Cached fetch core ----------
@@ -130,6 +133,7 @@ export class TropomiService {
         return sources;
       })
       .catch(async (err: any) => {
+        this.lastDiagnostic = `TROPOMI upstream request failed: ${err?.message ?? String(err)}`;
         console.warn("[TROPOMI] live fetch failed:", err?.message ?? String(err));
         if (this.cache) {
           const stale = await this.cache.get<NormalizedSource[]>(tropomiStaleKey());
@@ -196,10 +200,16 @@ export class TropomiService {
   }
 
   private async fetchEarthEngineSources(): Promise<NormalizedSource[]> {
-    await this.ensureEarthEngineReady();
+    this.lastDiagnostic = "Connecting to Google Earth Engine";
+    await ensureEarthEngineReady();
 
-    const features = loadOilBlockFeatures().filter(isAllowedTropomiOilBlock);
-    if (features.length === 0) return [];
+    const features = loadOilBlockFeatures().filter((f) =>
+      isAllowedOilBlockFeature(f, env.TROPOMI_OIL_BLOCK_TYPES, env.TROPOMI_OIL_GAS_BASINS)
+    );
+    if (features.length === 0) {
+      this.lastDiagnostic = `No Nigerian oil-block polygons matched TROPOMI_OIL_BLOCK_TYPES=${env.TROPOMI_OIL_BLOCK_TYPES} and TROPOMI_OIL_GAS_BASINS=${env.TROPOMI_OIL_GAS_BASINS}.`;
+      return [];
+    }
 
     const daysBack = env.TROPOMI_DAYS_BACK;
     const start = new Date(Date.now() - daysBack * 86_400_000);
@@ -236,6 +246,10 @@ export class TropomiService {
 
     const result = await evaluateEe<any>(reduced);
     const rows = Array.isArray(result?.features) ? result.features : [];
+    if (rows.length === 0) {
+      this.lastDiagnostic = `Google Earth Engine connected, but no quality-valid TROPOMI CH4 pixels were found over ${features.length} selected Nigerian oil block(s) in the last ${daysBack} days. This may be caused by cloud/quality filtering or the selected date window.`;
+      return [];
+    }
 
     const sources: NormalizedSource[] = [];
     for (const row of rows) {
@@ -282,6 +296,13 @@ export class TropomiService {
     }
 
     const enhanced = filterTropomiEnhancements(sources);
+    if (sources.length === 0) {
+      this.lastDiagnostic = `Earth Engine returned ${rows.length} oil-block result(s), but none had a positive finite CH4 mean and usable geometry.`;
+    } else if (enhanced.length === 0) {
+      this.lastDiagnostic = `${sources.length} TROPOMI CH4 result(s) were found, but all were removed by the configured enhancement threshold (percentile=${env.TROPOMI_ENHANCEMENT_PERCENTILE}, minimum=${env.TROPOMI_MIN_CH4 ?? "none"}).`;
+    } else {
+      this.lastDiagnostic = `Google Earth Engine returned ${enhanced.length} usable TROPOMI CH4 observation(s) over ${features.length} selected Nigerian oil block(s).`;
+    }
 
     if (env.TROPOMI_LOG_RESPONSE || env.NODE_ENV === "development") {
       console.log(
@@ -290,33 +311,6 @@ export class TropomiService {
       );
     }
     return enhanced;
-  }
-
-  private async ensureEarthEngineReady(): Promise<void> {
-    if (this.geeReady) return this.geeReady;
-
-    this.geeReady = new Promise<void>((resolve, reject) => {
-      const privateKey = parseGeePrivateKey();
-      ee.data.authenticateViaPrivateKey(
-        privateKey,
-        () => {
-          ee.initialize(
-            null,
-            null,
-            () => resolve(undefined),
-            (err: unknown) => reject(new Error(`Earth Engine initialization failed: ${formatGeeError(err)}`)),
-            null,
-            env.GEE_PROJECT_ID,
-          );
-        },
-        (err: unknown) => reject(new Error(`Earth Engine authentication failed: ${formatGeeError(err)}`)),
-      );
-    }).catch((err) => {
-      this.geeReady = null;
-      throw err;
-    });
-
-    await this.geeReady;
   }
 
   /**
@@ -528,48 +522,6 @@ function geometryCentroid(geometry: any): Centroid | null {
   return footprintCentroid(geometry);
 }
 
-function parseGeePrivateKey(): Record<string, unknown> {
-  if (env.GEE_PRIVATE_KEY_JSON?.trim()) {
-    try {
-      return JSON.parse(env.GEE_PRIVATE_KEY_JSON);
-    } catch (err) {
-      throw new Error(`Invalid GEE_PRIVATE_KEY_JSON: ${(err as Error).message}`);
-    }
-  }
-
-  const clientEmail = env.GEE_SERVICE_ACCOUNT_EMAIL?.trim();
-  const privateKey = env.GEE_PRIVATE_KEY?.replace(/\\n/g, "\n").trim();
-  if (!clientEmail || !privateKey) {
-    throw new Error("Missing Google Earth Engine service-account credentials");
-  }
-
-  return {
-    type: "service_account",
-    project_id: env.GEE_PROJECT_ID,
-    client_email: clientEmail,
-    private_key: privateKey,
-  };
-}
-
-function evaluateEe<T>(obj: any): Promise<T> {
-  return new Promise((resolve, reject) => {
-    obj.evaluate((result: T, err: unknown) => {
-      if (err) reject(new Error(formatGeeError(err)));
-      else resolve(result);
-    });
-  });
-}
-
-function formatGeeError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "string") return err;
-  try {
-    return JSON.stringify(err);
-  } catch {
-    return String(err);
-  }
-}
-
 function slugify(value: string): string {
   return value
     .toLowerCase()
@@ -613,23 +565,6 @@ function filterTropomiEnhancements(sources: NormalizedSource[]): NormalizedSourc
     }));
 }
 
-function isAllowedTropomiOilBlock(feature: any): boolean {
-  const typeRaw = (env.TROPOMI_OIL_BLOCK_TYPES ?? "").trim();
-  const basinRaw = (env.TROPOMI_OIL_GAS_BASINS ?? "").trim();
-
-  const typeAllowed = !typeRaw || typeRaw === "*" || typeRaw.toUpperCase() === "ALL"
-    ? null
-    : new Set(typeRaw.split(",").map((v) => v.trim().toUpperCase()).filter(Boolean));
-  const basinAllowed = !basinRaw || basinRaw === "*" || basinRaw.toUpperCase() === "ALL"
-    ? null
-    : new Set(basinRaw.split(",").map((v) => v.trim().toUpperCase()).filter(Boolean));
-
-  const type = String(feature?.properties?.type ?? "").trim().toUpperCase();
-  const basin = String(feature?.properties?.basin ?? "").trim().toUpperCase();
-
-  return (!typeAllowed || typeAllowed.has(type)) && (!basinAllowed || basinAllowed.has(basin));
-}
-
 /** Builds a WKT POLYGON string for the OData spatial filter. */
 function bboxToWktPolygon(bbox: BBox): string {
   const { minLon, minLat, maxLon, maxLat } = bbox;
@@ -637,117 +572,4 @@ function bboxToWktPolygon(bbox: BBox): string {
     `POLYGON((${minLon} ${minLat}, ${maxLon} ${minLat}, ` +
     `${maxLon} ${maxLat}, ${minLon} ${maxLat}, ${minLon} ${minLat}))`
   );
-}
-
-// ---------- Oil & Gas spatial filter ----------
-
-/**
- * NOSDRA-derived oil block geometries (OML / OPL / Block polygons) covering
- * the Nigerian onshore + offshore acreage. We load once at module init and
- * keep in memory — ~250 KB, immutable for the life of the process. The same
- * file is shipped to the frontend at `public/geojson/oil-blocks.geojson` so
- * map rendering and backend filtering are guaranteed to agree on what counts
- * as "oil & gas acreage".
- */
-let oilBlocksCache: any[] | null = null;
-
-function loadOilBlockFeatures(): any[] {
-  if (oilBlocksCache) return oilBlocksCache;
-  try {
-    // `import.meta.url` lets this resolve under both tsx watch (dev) and the
-    // compiled `dist/` output (production) without bundler-specific paths.
-    const here = dirname(fileURLToPath(import.meta.url));
-    // tropomi.service.ts lives in src/services/third-party/, the GeoJSON in
-    // src/data/. Three `..` walks to `src/`, then into `data/`.
-    const path = join(here, "..", "..", "data", "oil-blocks.geojson");
-    const raw = readFileSync(path, "utf8");
-    const parsed = JSON.parse(raw) as { features?: any[] };
-    oilBlocksCache = Array.isArray(parsed?.features) ? parsed.features : [];
-    applyOilBlockOverrides(oilBlocksCache, join(here, "..", "..", "data", "oil-block-overrides.json"));
-    if (env.TROPOMI_LOG_RESPONSE) {
-      console.log(`[TROPOMI] Loaded ${oilBlocksCache.length} oil-block polygons for spatial filtering`);
-    }
-  } catch (err: any) {
-    console.warn(
-      "[TROPOMI] Failed to load oil-blocks.geojson — oil-block filtering disabled:",
-      err?.message ?? err,
-    );
-    oilBlocksCache = [];
-  }
-  return oilBlocksCache;
-}
-
-function applyOilBlockOverrides(features: any[], overridesPath: string) {
-  try {
-    const raw = readFileSync(overridesPath, "utf8");
-    const overrides = JSON.parse(raw) as Record<string, { properties?: Record<string, unknown> }>;
-    for (const feature of features) {
-      const blockId = String(feature?.properties?.block_id ?? feature?.id ?? feature?.properties?.name ?? "");
-      if (!blockId) continue;
-      const override = overrides[blockId];
-      if (!override?.properties) continue;
-      feature.properties = {
-        ...(feature.properties ?? {}),
-        block_id: blockId,
-        ...override.properties,
-      };
-    }
-  } catch {
-    // Overrides are optional; source GeoJSON remains the fallback.
-  }
-}
-
-export interface MatchedOilBlock {
-  name: string;
-  type: string;
-  operator: string;
-}
-
-/**
- * Finds the first oil block polygon containing `(lon, lat)` and returns its
- * key descriptive properties — `null` if the point is outside every block.
- *
- * Walks the feature list and short-circuits on first hit; for ~300 NOSDRA
- * polygons this is sub-millisecond per check, comfortably under the budget
- * for ~50 scenes per refresh. Returning the matched block (rather than just
- * a boolean) lets the caller stamp provenance onto the NormalizedSource so
- * the frontend popup can show "TROPOMI scene over OML 42 (Shell)".
- *
- * Fail-closed: when the GeoJSON file can't be loaded, no point should be
- * treated as oil-and-gas acreage. This prevents broad TROPOMI swaths from
- * leaking into the map as northern/non-sector emissions.
- */
-let oilBlockUnavailableWarned = false;
-
-function findContainingOilBlock(lon: number, lat: number): MatchedOilBlock | null {
-  const features = loadOilBlockFeatures();
-  if (features.length === 0) {
-    if (!oilBlockUnavailableWarned) {
-      console.warn(
-        "[TROPOMI] oil-block filtering has no polygons loaded; dropping TROPOMI scenes until polygons are available.",
-      );
-      oilBlockUnavailableWarned = true;
-    }
-    return null;
-  }
-  const point = {
-    type: "Feature" as const,
-    geometry: { type: "Point" as const, coordinates: [lon, lat] },
-    properties: {},
-  };
-  for (const feature of features) {
-    try {
-      if (booleanPointInPolygon(point as any, feature as any)) {
-        const props = (feature as any)?.properties ?? {};
-        return {
-          name: typeof props.name === "string" && props.name ? props.name : "Unknown Block",
-          type: typeof props.type === "string" ? props.type : "",
-          operator: typeof props.operator === "string" ? props.operator : "",
-        };
-      }
-    } catch {
-      // Malformed feature — skip and continue.
-    }
-  }
-  return null;
 }

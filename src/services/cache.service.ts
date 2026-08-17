@@ -38,4 +38,18 @@ export class CacheService {
       // silently fail
     }
   }
+
+  async delByPattern(pattern: string): Promise<void> {
+    if (!this.connected) return;
+    try {
+      let cursor = "0";
+      do {
+        const [next, keys] = await this.redis.scan(cursor, "MATCH", pattern, "COUNT", 100);
+        cursor = next;
+        if (keys.length) await this.redis.del(...keys);
+      } while (cursor !== "0");
+    } catch {
+      // Cache invalidation must never make a successful publication fail.
+    }
+  }
 }

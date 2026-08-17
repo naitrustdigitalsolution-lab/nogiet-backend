@@ -26,9 +26,13 @@ import { SmsService } from "./services/sms/sms.service";
 import { CarbonMapperService } from "./services/third-party/carbon-mapper.service";
 import { ImeoService } from "./services/third-party/imeo.service";
 import { TropomiService } from "./services/third-party/tropomi.service";
+import { EmitService } from "./services/third-party/emit.service";
 import { SatelliteAggregatorService } from "./services/third-party/satellite-aggregator.service";
 import { CloudflareR2Service } from "./services/third-party/cloudflare-r2.service";
 import { CacheService } from "./services/cache.service";
+import { ImeoFeedService } from "./services/imeo-feed.service";
+import { ImeoFeedController } from "./controllers/imeo-feed.controller";
+import { imeoFeedRoutes } from "./routes/imeo-feed.routes";
 
 import { AuthController } from "./controllers/auth.controller";
 import { UserController } from "./controllers/user.controller";
@@ -45,6 +49,7 @@ import { uploadRoutes } from "./routes/upload.routes";
 export interface AppContext {
   fastify: FastifyInstance;
   emissionService: EmissionService;
+  imeoFeedService: ImeoFeedService;
 }
 
 export async function buildApp(db: any): Promise<AppContext> {
@@ -73,7 +78,7 @@ export async function buildApp(db: any): Promise<AppContext> {
   });
 
   await fastify.register(jwt, { secret: env.JWT_SECRET });
-  await fastify.register(multipart, { limits: { fileSize: 5 * 1024 * 1024 } });
+  await fastify.register(multipart, { limits: { fileSize: env.IMEO_UPLOAD_MAX_MB * 1024 * 1024 } });
   await fastify.register(cookie);
 
   await fastify.register(swagger, {
@@ -109,7 +114,10 @@ export async function buildApp(db: any): Promise<AppContext> {
   // populated through outages.
   const imeoService = new ImeoService(cacheService);
   const tropomiService = new TropomiService(cacheService);
-  const aggregator = new SatelliteAggregatorService(carbonMapper, imeoService, tropomiService, cacheService);
+  // EMIT reuses the same GEE_* credentials as TROPOMI — no separate auth flow.
+  const emitService = new EmitService(cacheService);
+  const imeoFeedService = new ImeoFeedService(db, imeoService, r2, cacheService, emailService, carbonMapper, tropomiService, emitService);
+  const aggregator = new SatelliteAggregatorService(carbonMapper, imeoService, tropomiService, emitService, cacheService, imeoFeedService);
 
   const authService = new AuthService(userRepo, emailService, smsService, fastify);
   const userService = new UserService(userRepo, emailService);
@@ -121,6 +129,7 @@ export async function buildApp(db: any): Promise<AppContext> {
   const emissionController = new EmissionController(emissionService);
   const roleController = new RoleController(roleService);
   const uploadController = new UploadController(r2);
+  const imeoFeedController = new ImeoFeedController(imeoFeedService);
 
   // --- Routes ---
   fastify.register(
@@ -130,6 +139,7 @@ export async function buildApp(db: any): Promise<AppContext> {
       emissionRoutes(instance, emissionController);
       roleRoutes(instance, roleController);
       uploadRoutes(instance, uploadController);
+      imeoFeedRoutes(instance, imeoFeedController);
     },
     { prefix: "/api/v1" }
   );
@@ -155,5 +165,5 @@ export async function buildApp(db: any): Promise<AppContext> {
     });
   });
 
-  return { fastify, emissionService };
+  return { fastify, emissionService, imeoFeedService };
 }

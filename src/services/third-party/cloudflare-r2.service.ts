@@ -77,4 +77,12 @@ export class CloudflareR2Service {
     }
     return `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${this.bucket}/${key}`;
   }
+
+  async downloadBuffer(key: string): Promise<{ bytes: Buffer; contentType: string }> {
+    if (!this.client) throw new Error("File archive is not configured");
+    const result = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
+    if (!result.Body) throw new Error("Archived file is empty");
+    const bytes = Buffer.from(await result.Body.transformToByteArray());
+    return { bytes, contentType: result.ContentType ?? "application/octet-stream" };
+  }
 }

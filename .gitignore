@@ -17,6 +17,10 @@ npm-debug.log*
 yarn-debug.log*
 pnpm-debug.log*
 
+# Runtime archives for manually uploaded provider datasets
+storage/manual-uploads/*
+!storage/manual-uploads/.gitkeep
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

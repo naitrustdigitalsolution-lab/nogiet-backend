@@ -834,9 +834,10 @@ export class EmissionService {
   }
 
   async getDataCompletenessAudit() {
-    const [dbSummary, satelliteSources] = await Promise.all([
+    const [dbSummary, satelliteSources, imeoFeedStatus] = await Promise.all([
       this.emissionRepo.getDataCompletenessSummary(),
       this.aggregator.fetchAllSources(NIGERIA_BBOX, undefined, "CH4").catch(() => [] as NormalizedSource[]),
+      this.aggregator.getImeoFeedStatus().catch(() => ({ mode: "manual", activeBatch: null, blockedReason: null })),
     ]);
 
     const byProvider = new Map<SatelliteProvider, {
@@ -846,9 +847,12 @@ export class EmissionService {
       totalEmissionRate: number;
       latestDetection: string | null;
       status: "active" | "configured_no_data" | "not_configured";
+      blockedReason?: string | null;
+      feedMode?: string;
+      activeDataset?: unknown;
     }>();
 
-    const providerLabels: SatelliteProvider[] = ["carbon_mapper", "imeo", "tropomi"];
+    const providerLabels: SatelliteProvider[] = ["carbon_mapper", "imeo", "tropomi", "emit"];
     for (const provider of providerLabels) {
       const configured = this.aggregator.configuredProviders.includes(provider);
       byProvider.set(provider, {
@@ -858,6 +862,9 @@ export class EmissionService {
         totalEmissionRate: 0,
         latestDetection: null,
         status: configured ? "configured_no_data" : "not_configured",
+        blockedReason: provider === "imeo" ? imeoFeedStatus.blockedReason ?? null : undefined,
+        feedMode: provider === "imeo" ? imeoFeedStatus.mode : undefined,
+        activeDataset: provider === "imeo" ? imeoFeedStatus.activeBatch : undefined,
       });
     }
 
@@ -897,10 +904,13 @@ export class EmissionService {
         .filter((row) => row.status !== "active")
         .map((row) => ({
           severity: row.configured ? "medium" : "high",
-          item: `${row.provider.replace(/_/g, " ")} has no visible live detections`,
-          recommendation: row.configured
-            ? "Check credentials, upstream availability, filters, and cache refresh logs."
-            : "Configure this provider if the client expects it in production coverage.",
+          item: row.blockedReason
+            ? `${row.provider.replace(/_/g, " ")} is blocked upstream, not just missing data`
+            : `${row.provider.replace(/_/g, " ")} has no visible live detections`,
+          recommendation: row.blockedReason
+            ?? (row.configured
+              ? "Check credentials, upstream availability, filters, and cache refresh logs."
+              : "Configure this provider if the client expects it in production coverage."),
         })),
       ...metadataFields
         .filter((field) => field.missing > 0)
@@ -936,7 +946,14 @@ export class EmissionService {
           name: "UNEP IMEO",
           category: "global methane plume inventory",
           status: byProvider.get("imeo")?.status ?? "not_configured",
-          action: "Keep enabled once upstream token/IP access is accepted.",
+          action: byProvider.get("imeo")?.blockedReason
+            ?? (imeoFeedStatus.mode === "manual" ? "Serving the active monthly manual upload." : "Serving the live IMEO API."),
+        },
+        {
+          name: "NASA EMIT",
+          category: "satellite plume complexes with quantification",
+          status: byProvider.get("emit")?.status ?? "not_configured",
+          action: "Reuses existing GEE credentials; sparse but real coverage over Nigeria today.",
         },
         {
           name: "Sentinel-5P TROPOMI",

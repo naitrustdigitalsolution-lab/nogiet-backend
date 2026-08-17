@@ -104,6 +104,18 @@ export class ImeoService {
   private proxyDispatcher: ProxyAgent | null = null;
   /** In-flight dedupe — mirrors CarbonMapperService pattern in EmissionService. */
   private fetchPromise: Promise<NormalizedSource[]> | null = null;
+  /**
+   * Set whenever a live fetch is rejected by Cloudflare's WAF before reaching the
+   * IMEO API (403 + "Just a moment..." body). Surfaced via `lastBlockedReason` so
+   * the completeness audit can distinguish "blocked, awaiting UNEP whitelist" from
+   * a generic "configured but no data" gap. Cleared on the next successful fetch.
+   */
+  private lastBlockedReason: string | null = null;
+
+  /** Non-null when the most recent live fetch was blocked by Cloudflare, not an auth/config issue. */
+  get lastBlockedReasonPublic(): string | null {
+    return this.lastBlockedReason;
+  }
 
   constructor(private cache?: CacheService) {
     this.baseUrl = normalizeImeoBaseUrl(env.IMEO_API_URL ?? "");
@@ -202,6 +214,13 @@ export class ImeoService {
     if (!this.isConfigured) return [];
     if (this.cache) await this.cache.del(imeoCacheKey(gasType));
     const all = await this.fetchAllSourcesCached(gasType);
+    return this.applyFilters(all, bbox);
+  }
+
+  /** Bypasses every cache and stale fallback; used before enabling API mode. */
+  async testLiveConnection(bbox?: BBox): Promise<NormalizedSource[]> {
+    if (!this.isConfigured) throw new Error("IMEO API credentials are not configured");
+    const all = await this.fetchAllSourcesLive();
     return this.applyFilters(all, bbox);
   }
 
@@ -328,6 +347,8 @@ export class ImeoService {
       throw new Error(`/plumes_w_wo_sources returned ${items.firstStatus}`);
     }
 
+    this.lastBlockedReason = null;
+
     const normalized: NormalizedSource[] = [];
     for (const raw of items.records) {
       const n = this.normalize(raw, "plumes");
@@ -430,6 +451,9 @@ export class ImeoService {
           } catch { /* ignore */ }
           const looksCloudflare = /cloudflare|just a moment|cf-ray|cf-mitigated/i.test(body);
           if (looksCloudflare) {
+            this.lastBlockedReason =
+              "Blocked by Cloudflare WAF — egress IP not yet whitelisted by UNEP. " +
+              "Email unep-methanedata@un.org to whitelist, or set IMEO_PROXY_URL / IMEO_COOKIE as a stop-gap.";
             console.warn(
               `[IMEO v2] BLOCKED BY CLOUDFLARE (${response.status}). Not an auth problem — your egress IP is being challenged. ` +
               "Fixes: (1) email unep-methanedata@un.org to whitelist your server IP; (2) set IMEO_PROXY_URL to a clean residential proxy; " +
@@ -485,16 +509,20 @@ export class ImeoService {
     if (!item || typeof item !== "object") return null;
     const row = item as Record<string, unknown>;
 
-    if (row.type === "Feature" && row.geometry && typeof row.geometry === "object") {
+    if (row.type === "Feature") {
+      const p = (row.properties && typeof row.properties === "object" ? row.properties : {}) as Record<
+        string,
+        unknown
+      >;
+      if (!row.geometry || typeof row.geometry !== "object") return this.normalizeFlat(p, listKind);
       const g = row.geometry as Record<string, unknown>;
       if (g.type === "Point" && Array.isArray(g.coordinates)) {
         const [lon, lat] = g.coordinates as [number, number];
-        const p = (row.properties && typeof row.properties === "object" ? row.properties : {}) as Record<
-          string,
-          unknown
-        >;
         return this.normalizeFlat({ ...p, lon, lat, longitude: lon, latitude: lat }, listKind);
       }
+      // UNEP downloadable plume GeoJSON uses Polygon/MultiPolygon geometry but
+      // includes plume centroid `lat`/`lon` in properties.
+      return this.normalizeFlat(p, listKind);
     }
     return this.normalizeFlat(row, listKind);
   }
