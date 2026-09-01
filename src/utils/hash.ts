@@ -1,4 +1,5 @@
 import bcrypt from "bcryptjs";
+import { randomInt } from "crypto";
 
 const SALT_ROUNDS = 12;
 
@@ -14,7 +15,9 @@ export function generateOTP(length = 6): string {
   const digits = "0123456789";
   let otp = "";
   for (let i = 0; i < length; i++) {
-    otp += digits[Math.floor(Math.random() * digits.length)];
+    // crypto.randomInt is CSPRNG-backed; Math.random() is predictable and
+    // unsafe for anything used as a security token (password-reset codes).
+    otp += digits[randomInt(0, digits.length)];
   }
   return otp;
 }
