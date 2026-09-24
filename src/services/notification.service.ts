@@ -4,7 +4,6 @@ import { SmsService } from "./sms/sms.service";
 import { UserRepository } from "../repositories/user.repository";
 import type { CarbonMapperSource } from "../types/index";
 import type { Server as SocketIOServer } from "socket.io";
-import { env } from "../config/env";
 
 export interface AlertThresholdConfig {
   minEmissionRate: number;
@@ -110,7 +109,6 @@ export class NotificationService {
     if (!this.smsService || !this.userRepo) return;
     try {
       const admins = await this.userRepo.findAdminUsers();
-      const frontendUrl = env.FRONTEND_URL || "https://nogiet.netlify.app";
       for (const admin of admins) {
         if (!admin.phone) continue;
         const rateStr = `${emissionRate.toFixed(1)} kg/hr`;

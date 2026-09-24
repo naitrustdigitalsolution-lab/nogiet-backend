@@ -10,6 +10,7 @@ import swaggerUi from "@fastify/swagger-ui";
 import { Server as SocketIOServer } from "socket.io";
 
 import { env } from "./config/env";
+import { getAllowedOrigins } from "./config/cors";
 import { errorHandler } from "./middlewares/error-handler.middleware";
 import { requestLogger } from "./middlewares/request-logger.middleware";
 
@@ -64,8 +65,9 @@ export async function buildApp(db: any): Promise<AppContext> {
   });
 
   // --- Plugins ---
+  const allowedOrigins = getAllowedOrigins(env.FRONTEND_URL, env.CORS_ORIGINS);
   await fastify.register(cors, {
-    origin: [env.FRONTEND_URL],
+    origin: allowedOrigins,
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   });
@@ -150,7 +152,7 @@ export async function buildApp(db: any): Promise<AppContext> {
   fastify.ready().then(() => {
     const io = new SocketIOServer(fastify.server, {
       cors: {
-        origin: [env.FRONTEND_URL],
+        origin: allowedOrigins,
         credentials: true,
       },
     });

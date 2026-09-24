@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 
+process.env.FRONTEND_URL ||= "https://frontend.example";
 process.env.DATABASE_URL ||= "postgresql://test:test@localhost:5432/test";
 process.env.JWT_SECRET ||= "test-jwt-secret-long-enough";
 process.env.JWT_REFRESH_SECRET ||= "test-refresh-secret-long-enough";

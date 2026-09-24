@@ -143,7 +143,9 @@ const envSchema = z.object({
 
   REDIS_URL: z.string().default("redis://localhost:6379"),
 
-  FRONTEND_URL: z.string().default("http://localhost:5173"),
+  // One frontend origin or a comma-separated list for HTTP and Socket.IO CORS.
+  FRONTEND_URL: z.string().trim().min(1),
+  CORS_ORIGINS: z.string().default(""),
 });
 
 export type Env = z.infer<typeof envSchema>;
