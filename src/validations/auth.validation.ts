@@ -12,12 +12,12 @@ export const forgotPasswordSchema = z.object({
 
 export const verifyCodeSchema = z.object({
   email: z.string().email("Invalid email address"),
-  code: z.string().length(6, "Verification code must be 6 digits"),
+  code: z.string().regex(/^\d{6}$/, "Verification code must be 6 digits"),
 });
 
 export const resetPasswordSchema = z.object({
   email: z.string().email("Invalid email address"),
-  code: z.string().length(6, "Verification code must be 6 digits"),
+  code: z.string().regex(/^\d{6}$/, "Verification code must be 6 digits"),
   password: z.string().min(8, "Password must be at least 8 characters"),
   confirmPassword: z.string(),
 }).refine((data) => data.password === data.confirmPassword, {

@@ -14,7 +14,12 @@ export class EmailService {
     }
   }
 
-  private async send(to: string, subject: string, html: string) {
+  private async send(to: string, subject: string, html: string, required = false) {
+    const deliveryError = () => Object.assign(
+      new Error("Unable to send the reset email. Please try again later or contact support."),
+      { statusCode: 503 }
+    );
+    if (env.NODE_ENV !== "test" && !this.resend && required) throw deliveryError();
     if (env.NODE_ENV === "test" || !this.resend) {
       console.log(`[EMAIL] To: ${to}, Subject: ${subject}`);
       return;
@@ -30,15 +35,17 @@ export class EmailService {
 
       if (error) {
         console.error("Resend send error:", error);
+        if (required) throw deliveryError();
       }
     } catch (err) {
       console.error("Email send error:", err);
+      if (required) throw deliveryError();
     }
   }
 
   async sendPasswordReset(email: string, name: string, code: string) {
     const html = passwordResetTemplate(name, code);
-    return this.send(email, "NOGIET - Password Reset Code", html);
+    return this.send(email, "NOGIET - Password Reset Code", html, true);
   }
 
   async sendPasswordChanged(email: string, name: string) {
